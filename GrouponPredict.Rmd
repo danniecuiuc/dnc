@@ -1,0 +1,179 @@
+---
+title: "Groupon Exercise"
+output: pdf_document
+fig_caption: true
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+# Recommendation: BUY
+### - Estimated 4Q 2013 Gross Billings is $792.8 million, which is higher than the previous quarter.
+### - Competitive business model: platform charging advertising fees (we can ragard the discouts as advertising fees, just like Facebook), which is profitable, with low costs, and easy to form positive network externalities.
+
+# Estimate Groupon’s 4Q13 North America Gross Billings By Segments:
+## Local: $440.07M
+## Goods: $282.25M
+## Travel: $70.55M
+# Total: $792.87M
+
+# Summary: 
+To estimate the gross billings data for each segment, first I imputed the missing data in the Local segment by carefully choosing relevant nearby datasets in the time series to estimate the missing ones, excluding extreme value with cumulative probabilities of 1%. The rationale of the method is relative to the pattern of the data: there seems to be a continuous performance pattern for a business within a short period. The billing data might be correlated with nearby data. Therefore, using the data near the missing data in a time series will give a more accurate estimate than using the entire dataset. 
+Excluding extreme values that might only occur by chance, is also important when imputing the missing values. In the dataset there are some extreme datapoints with very high values. Not excluding them will lead to overestimated gross billings.
+The inaccuracy and data irregularities will be discussed at the end of this report.
+
+## 1. Data Manipulation & Dataset Preparation
+
+```{r, message=FALSE, warning=FALSE}
+library(readxl)
+library(dplyr)
+options(scipen=100)
+rawdata_q4 <- read_excel("~/Downloads/take home exercise-yipitdata/Groupon/Q4_2013_Groupon_North_America_Data_XLSX.xlsx")
+raw_local <- filter(rawdata_q4, Segment == "Local", Billings != 0)
+raw_goods <- filter(rawdata_q4, Segment == "Goods", Billings != 0)
+raw_travel <- filter(rawdata_q4, Segment == "Travel", Billings != 0)
+
+# Add back
+library(imputeTS)
+dates <- c("2013-10-20", "2013-10-21", "2013-10-22", "2013-10-23", "2013-10-24", "2013-10-25", "2013-10-26", "2013-10-27", "2013-10-28", "2013-10-29", "2013-10-30")
+Dates <- as.Date(dates)
+
+subset <- data.frame(Start_Date = raw_local$Start_Date, Billings = raw_local$Billings)
+added <- data.frame(Start_Date = Dates, Billings = NA)
+local_missing <- rbind(subset, added)
+
+```
+
+
+## 2. Data Visualization
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+ggplot(rawdata_q4, aes(x = Start_Date, y = Billings))+
+  geom_point(size = 0.005)+
+  facet_wrap( ~ Segment)+
+  theme_light()+
+  theme(axis.text.x = element_text(angle = 45))
+
+```
+
+##### From the graph, there is no obvious relationship between Local Billing Values and Goods/Travel Billing values. Different Segment might perform quite differently, even at the same time period, due to the nature of its business. 
+##### So this suggest that it might be NOT reasonable to use another two segments to impute the missing data in Local segment. 
+
+###  In the time series data, there might be some continuous performance pattern within the same segmenet.So let's take a look at the time series Local Bilings data itself.
+
+##  3. Local segment: Visualize the missing values in the time series data
+```{r, message=FALSE, warning=FALSE}
+# Local Billings Time Series Visualization
+library(naniar)
+ggplot(local_missing, aes(x = as.Date(Start_Date), y = Billings)) +
+  geom_miss_point(size = 0.5) +
+  scale_x_date(date_breaks = "1 month")+
+  ggtitle("Missing Values in Local Time Series Billings Data")+
+  theme(axis.text.x = element_text(angle=45))
+
+```
+
+## Time Series Data: Generally, there might be a continuous trend in performance of a business within a short period of time, if no disaster or big shock happens. This might be suggesting that, the 11-day missing data might have similar pattern to the data from the periods which are nearby. Using the entire time series pattern to impute the short-period missing data might not be a good idea, since there might be some change in business performance over time or the performance pattern might be seasonal or monthly.
+
+We can actually the following things to impute the missing data:
+(1)Use data nearby to impute missing values;
+(2)Identify and exclude occasionalextreme values.
+
+### 3.1 Choose Appropriate Range of Nearby Data
+Since we have missing data for 11 days, so we choose 11 days before Oct 20 2013, and 11 days after Oct 30 2013 as our nearby data.
+So the data should be:
+```{r, message=FALSE, warning=FALSE}
+local_nearby <- filter(local_missing, Start_Date == 2013-10-09)
+before <- local_missing %>%
+  filter(Start_Date > as.POSIXct("2013-10-08"), Start_Date <= as.POSIXct("2013-10-19"))
+after <- local_missing %>%
+  filter(Start_Date > as.POSIXct("2013-10-30"), Start_Date <= as.POSIXct("2013-11-10"))
+range <- rbind(before, after)
+ggplot(range, aes(x = Start_Date, y = Billings))+
+  geom_point()+
+  ggtitle("Billings ($) for Nearby 22-day Data")
+```
+### 3.2 Identify Extreme Values
+
+```{r, message=FALSE, warning=FALSE}
+# Density Function of Local Billings Distribution
+quantile(range$Billings, probs = c(0.005,0.995))
+ggplot(range, aes(x = Billings))+
+  geom_density()+
+  coord_cartesian(xlim = c(quantile(range$Billings, 0.005), quantile(range$Billings, 0.995)))+
+  ggtitle("Density of Billings Distribution for Nearby 22-day Data")
+
+range_apply <- range %>% 
+  filter(Billings >= 26.1, Billings <= 91000.0)%>%
+  mutate(Extreme = "Values To Be Used (99%)" )
+range_extreme <- range %>% 
+  filter(Billings < 26.1 | Billings > 91000.0)%>%
+  mutate(Extreme = "Extreme Values (1%)" )
+range_all <- rbind(range_apply, range_extreme)
+
+ggplot(range_all, aes(x = Start_Date, y = Billings, color = Extreme))+
+  geom_point()+
+  ggtitle("Nearby Data Used to Impute Missing Data")
+```
+
+The 0.5% percentile of billing data at nearby dates is 26.1, and the 99.5% percentile is 91000.0. We should exclude extreme values which are HIGHER than 91000.0 or LOWER than 26.1, which might be only occasional cases.
+Defined Extreme Cases: Billings <-26.1 or Billings > 91000.0
+
+
+## 4. Impute the missing values in Local Billing Data
+There are different ways to impute missing values in time series data. Using means, medians, and Next I will try to use different methods to impute, and the most propriate method will be choosed finally after comparing different methods. 
+
+```{r, message=FALSE, warning=FALSE}
+range_before <- range_apply %>%
+  filter(Start_Date <as.POSIXct("2013-10-25"))
+range_after <- range_apply %>%
+  filter(Start_Date >as.POSIXct("2013-10-25"))
+# Use mean of before-period and after period to impulate missing total billing numbers in the 11 days:
+imputed_missing_total_billing <- 0.5*sum(range_before$Billings)+0.5*sum(range_after$Billings)
+imputed_missing_total_billing
+```
+
+## 5. Calculate Estimated Gross Billing Data for Each Segment
+```{r, message=FALSE, warning=FALSE}
+Local_billing_4Q13 <- sum(sum(raw_local$Billings), imputed_missing_total_billing)
+Goods_billing_4Q13 <- sum(raw_goods$Billings)
+Travel_billing_4Q13 <- sum(raw_travel$Billings)
+Total_billing_4Q13 = sum(Local_billing_4Q13, Goods_billing_4Q13, Travel_billing_4Q13)
+data.frame(Local_billing_4Q13, Goods_billing_4Q13, Travel_billing_4Q13, Total_billing_4Q13)
+```
+
+
+## 6. Investment Recommendation: BUY
+
+```{r, message=FALSE, warning=FALSE}
+billing_trend <- read_excel("~/Downloads/bil1.xlsx")
+unitsold <- read_excel("~/Downloads/Unitsold.xlsx")
+new_deals <- read_excel("~/Downloads/New_deals.xlsx")
+
+ggplot(billing_trend, aes(x = Time, y = Billings, colour = Segment)) +
+  geom_line(aes(group = Segment))+
+  theme_light()+
+  ggtitle("Estimated Billings from 3Q-2012 to 4Q-2013")
+
+ggplot(unitsold, aes(x = Time, y = Unitsold, colour = Segment)) +
+  geom_line(aes(group = Segment))+
+  theme_light()+
+  ggtitle("Estimated Units Sold from 3Q-2012 to 4Q-2013")
+
+ggplot(new_deals, aes(x = Time, y = New_Deal_Started, colour = Segment)) +
+  geom_line(aes(group = Segment))+
+  theme_light()+
+  ggtitle("Estimated New Deals Started from 3Q-2012 to 4Q-2013")
+```
+#### As we can see from the graph "Estimated Billings from 3Q-2012 to 4Q-2013", the estimated gross billings for the total of 3 segments is in an overall increasing trend. Especially, we expected to see a deeper increase in 4Q 2013 financial report.
+
+#### We do not have data of units sold and new deals for 4Q 2013, but we can see from the previous trend that
+#### (1)Units sold is slightly increasing in the last year;
+#### (2)New Deals Started decreased for Local segments in 3Q 2013, while goods and travel segments saw a slight increase. But the decrease might be due to some seasonal factors and its efforts turning from push to pull.
+
+#### My recommendation is to buy. One simple reason is the increasing trend in its total gross billings, which has been estimated above. Other factor would include its solid fundamental and its good business pattern. We should never focus on the data only ignoring the nature and potential growth driver of a business. As a website that offers discounted gift certificates usable at local or national companies, it's more like gaining the advertisement fees, just like Facebook, to make profits. Such a "Platform" business pattern is profitable, with low costs, and has potential growth opportunities. 
+
+## 7. Other relevant irregularities
+#### In our analysis, we find that there are some extreme values in the data, some of which might be due to occasional reason but others might be even False Data. Although I was using the probability to reduce some of the extreme values, it is still hard to identify which are occasional billings by nature given the information in the excel sheets. 
+#### The financial report is not in real-time, which might cause lagged information problem. 
+#### Quarterly financial billings data only reflecting corresponding financial information. However, there is something important to evaluate a company that cannot be immediately reflected or easily identified in the report. Such things include the strategy change, innovation, core competence, growth strategy of a business. So we should use more alternative data to evaluate a company from multiple aspects, not only relying on the financial data.
